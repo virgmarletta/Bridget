@@ -27,11 +27,13 @@ class BRIDGET:
                  target, 
                  user_model, 
                  protected, cats, num,
-                 preprocessor=None):
+                 preprocessor=None,
+                 training_iter=1):
         
         self.dataset_name= dataset_name
         self.name= user_name
         self.user_model = user_model 
+        self.training_iter = training_iter
         
         # -- Batch 1: 60 %
         self.df_batch1 = df_batch1 ## il batch 1 , cioè lo stato iniziale prima del decision making di BRIDGET
@@ -114,10 +116,12 @@ class BRIDGET:
                 print(f"Current belief_threshold: {self.belief_threshold}")
                 print(f"Last 5 FEA values: {self.fea_mic[-5:]}")
 
+            dir = os.path.join(f"processed_data", self.dataset_name, "drift_checkpoints", f"iter_{self.training_iter}")
+            os.makedirs(dir, exist_ok=True)
+            file_path = os.path.join(dir, f"{current_phase}_{self.name}_{strat}.csv")
 
-            current_log.to_csv(f".\processed_data\{self.dataset_name}\drift_checkpoints\{current_phase}_{self.name}_{strat}", 
-                               index= False)
-
+            current_log.to_csv(file_path, index= False)
+            
             return True
         
         return False
@@ -851,7 +855,7 @@ class HiC(BRIDGET):
 
                 if hic_drift:
                     #print(f"Drift here! Record index {record}")
-                    dir = os.path.join("HIC_res", f"{self.dataset_name}", f"results_{self.name}")
+                    dir = os.path.join("HIC_res", f"{self.dataset_name}",f"iter_{self.training_iter}", f"results_{self.name}")
                    
                     hic_pref = f"HIC_DRIFT_User_{self.name}_{self.hic_model_name}"
 
@@ -910,7 +914,7 @@ class HiC(BRIDGET):
 
                 if i ==  (len(self.X)-1):
                     
-                    dir = os.path.join("HIC_res", f"{self.dataset_name}", f"results_{self.name}")
+                    dir = os.path.join("HIC_res", f"{self.dataset_name}", f"iter_{self.training_iter}", f"results_{self.name}")
 
                     hic_pref = f"User_{self.name}_{self.hic_model_name}"
 
@@ -1336,7 +1340,7 @@ class MiC(BRIDGET):
                 
 
                 strat = "Mao" if two_step_deferral else "Confidence"
-                dir = os.path.join("MIC_res", f"{self.dataset_name}", f"{self.name}_{strat}")
+                dir = os.path.join("MIC_res", f"{self.dataset_name}", f"iter_{self.training_iter}", f"{self.name}_{strat}")
                 
                 mic_pref= f"MIC_DRIFT_User_{self.name}_{self.mic_model_name}"
 
@@ -1383,7 +1387,7 @@ class MiC(BRIDGET):
         
 
         strat = "Mao" if two_step_deferral else "Confidence"
-        dir = os.path.join("MIC_res", f"{self.dataset_name}", f"{self.name}_{strat}")
+        dir = os.path.join("MIC_res", f"{self.dataset_name}", f"iter_{self.training_iter}", f"{self.name}_{strat}")
 
         mic_pref= f"User_{self.name}_{self.mic_model_name}"
 

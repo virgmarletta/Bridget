@@ -1,1 +1,0 @@
-{'instances_processed': 0, 'user_confirmed': 0, 'user_rethinked': 0, 'priority_1': 0, 'priority_2': 0}
