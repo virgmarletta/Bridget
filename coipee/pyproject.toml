@@ -1,0 +1,45 @@
+[build-system]
+requires = [
+    "hatchling"
+]
+build-backend = "hatchling.build"
+
+[project]
+name = "coipi"
+version = "0.0.1"
+authors = [
+  { name="Mattia Setzu", email="mattia.setzu@unipi.it" },
+]
+description = "Demo of a Caipi-like system for explanatory interactive learning."
+readme = "README.md"
+requires-python = ">3.11, <=3.12"
+classifiers = [
+    "Programming Language :: Python :: 3.12.3",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Operating System :: OS Independent",
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers"
+]
+dependencies = [
+    "cloudpickle==3.0.0",
+    "joblib==1.4.2",
+    "llvmlite==0.42.0",
+    "numba==0.59.1",
+    "numpy==1.26.4",
+    "packaging==24.0",
+    "pandas==2.2.2",
+    "python-dateutil==2.9.0.post0",
+    "pytz==2024.1",
+    "scikit-learn==1.5.0",
+    "scipy==1.13.1",
+    "shap==0.45.1",
+    "six==1.16.0",
+    "slicer==0.0.8",
+    "threadpoolctl==3.5.0",
+    "tqdm==4.66.4",
+    "tzdata==2024.1"
+]
+
+[project.urls]
+	"Homepage" = "https://github.com/msetzu/coipee"
+	"Bug Tracker" = "https://github.com/msetzu/coipee"

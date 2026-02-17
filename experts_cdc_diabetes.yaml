@@ -1,0 +1,181 @@
+
+########################
+#   CDC DIABETES 50/50 VER
+########################
+
+experts:
+  groups: 
+
+      # -- come da Open L2D, ci sarebbero due metodi per definire la distribuzione dei pesi
+      # -- 1. Spike and Slab (common distribution across all features)
+      # -- 2. Normal Distribution w/ individual mean/std for the features 
+
+
+
+      #######################################################
+      #---------------Weight Sampling Settings--------------#
+
+      # Within the classes, the features are ordered from the most to least important
+
+      # Highly relevant: BMI, HighBP / HighChol, GenHlth / HeartDiseaseorAttack / Stroke
+
+      # Moderately : Age, PhysHlth / PhysActivity / Smoker
+
+      # Somewhat: Sex / DiffWalk, HyvAlcoholConsump / Fruits / Veggies, MntlHlth
+      
+      # Inconsequential: Income / Education / AnyHealthcare / NoDocbcCost / CholCheck
+
+
+    w_dict:
+
+      HighBP:
+        - 0.60
+        - 0.1
+
+      HighChol:
+        - 0.60
+        - 0.1
+
+      CholCheck:
+        - 0.0
+        - 0.05
+
+      BMI:   
+        - 0.65
+        - 0.1
+
+      Smoker:
+        - 0.3
+        - 0.1
+
+      Stroke:
+        - 0.50
+        - 0.05
+
+
+      HeartDiseaseorAttack:
+        - 0.50
+        - 0.05
+
+      PhysActivity:
+        - 0.3
+        - 0.05
+
+      Fruits: 
+        - 0.15
+        - 0.05
+
+      Veggies:
+        - 0.15
+        - 0.05
+
+      HvyAlcoholConsump:  
+        - 0.15
+        - 0.05
+
+      AnyHealthcare:
+        - 0.0
+        - 0.05
+
+
+      NoDocbcCost:
+        - 0.0
+        - 0.05
+
+
+      GenHlth:
+        - 0.50
+        - 0.1
+
+
+      MentHlth:
+        - 0.10
+        - 0.05
+
+
+      PhysHlth:
+        - 0.3
+        - 0.05
+
+
+      DiffWalk:
+        - 0.2
+        - 0.05
+
+      Sex: # PROTECTED
+        - 0.2
+        - 0.05
+
+      Age: # PROTECTED   
+        - 0.40
+        - 0.1
+
+      Education: 
+        - 0.0
+        - 0.05
+
+      Income:
+        - 0.0
+        - 0.05
+
+
+        
+      
+      # - EXPERT 1: ACCURATE/TRUSTS FRANK
+    accurate_trusting:
+      
+      
+      group_seed: 1
+      n: 1
+
+      ################################################
+      #------------Performance Settings--------------#
+
+      # -- anche qui ci sono due metodi: 1 su Defining Cost Distribution, 2 su defining FPR and FNR Distribution
+      # -- potremmo fissare il target FPR/FNR hardcoded o mantenendo la struttura di Open L2A integrale
+
+      belief_value: 0.7
+
+      # - OPTION 1: Fixed Expertise
+      # - i due target combined rappresenterebbero l'overall expertise degli esperti
+      target_FPR: 0.15
+
+      target_FNR: 0.15
+
+      # - OPTION 2: Bounded Expertise
+      # - sarebbe necessario avere target mean e std + max/min target FPR per la distribuzione
+
+
+    # - EXPERT 2: ACCURATE/DOESNT TRUST FRANK
+    accurate_not_trusting:
+      group_seed: 2
+      n: 1
+
+      belief_value: 0.3
+
+      target_FPR: 0.15
+      
+      target_FNR: 0.15
+
+
+
+    # - EXPERT 3: NOT VERY ACCURATE/ TRUSTS FRANK
+    inaccurate_trusting:
+
+      group_seed: 3
+      n: 1
+      belief_value: 0.7
+    
+      target_FPR: 0.4
+
+      target_FNR: 0.4
+
+    # - EXPERT 4: NOT VERY ACCURATE/ DOESNT TRUST FRANK
+    inaccurate_not_trusting:
+      group_seed: 4
+      n: 1
+      belief_value: 0.3
+        
+      target_FPR: 0.4
+
+      target_FNR: 0.4
