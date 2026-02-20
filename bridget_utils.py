@@ -13,6 +13,17 @@ from growingspheres import counterfactuals as cf
 import os
 import pickle
 import orjson
+import random
+
+from torch.utils.data import TensorDataset, DataLoader
+from torch.optim.lr_scheduler import StepLR
+
+from ignite.metrics import Accuracy, Loss
+from ignite.engine import Engine, Events, create_supervised_trainer, create_supervised_evaluator
+from ignite.handlers import EarlyStopping, ModelCheckpoint
+from ignite.contrib.handlers import global_step_from_engine
+
+
 ###########
 # -- FUNZIONI NECESSARIE PER LA PREDIZIONE DEGLI ESPERTI (prese da Open L2D)
 def sig(x):
@@ -246,7 +257,6 @@ def get_percentage_and_df(df_train, processed, target): # modificata leggermente
     g_truths= 'ground truth'
     provider_f= 'provider'
     model_conf= 'proba_model'
-    idx= 'idx'
     processed_c = processed.copy()
     rows = []
 
@@ -266,9 +276,7 @@ def get_percentage_and_df(df_train, processed, target): # modificata leggermente
                 row[g_truths]= entry['ground_truth']
                 row[model_conf]= entry['proba_model']
                 row[target] = entry['decision']
-                row[provider_f]= entry['provider_flag']
-                row[idx]=entry['idx']
-                
+                row[provider_f]= entry['provider_flag']               
 
                 rows.append(row)
                 
@@ -304,57 +312,12 @@ def convert_numpy(obj):
     return obj
 
 
+
+
+
 ###########
 # -- DRIFT CHECK and FEA
-def drift_check_HiC(fea_values, thresh, iter_count= None, k_max=None):
-        """
-        Funzione che verifica se durante HiC c'è conceptual drift
 
-        Return True --> c'è drift, si passa a MiC
-        
-        :param iter_count: current iteration number
-        :param k_max: k iterations threshold defined to perform the check 
-        :param thresh: alpha threshold value, prehemptively picked by the supervisor
-        :param fea_values: list of fading empirical accuracy values of the machine model
-        
-        """
-        ### Tutte le condizioni devono essere verificate btw
-
-        if not fea_values or iter_count is None or k_max is None:
-            return False
-        
-        avg_fea= np.mean(fea_values)
-
-        if iter_count > k_max and avg_fea >= thresh:
-            return True
-        
-        return False
-
-def drift_check_MiC(fea_values, low_belief_count, thresh, p_max=None):
-    """
-        Funzione che verifica se durante MiC c'è conceptual drift
-
-        Return True --> c'è drift, si passa a HiC
-        
-        :param low_belief_count: amount of times belief was lower than a set Beta threshold
-        :param p_max: p max iterations where a low belief is allowed
-        :param thresh: alpha threshold value, prehemptively picked by the supervisor
-        :param fea_values: list of fading empirical accuracy values of the machine model
-        
-    """
-    if not fea_values and p_max is None:
-        return False
-    
-    avg_fea= np.mean(fea_values)
-    
-    if low_belief_count > p_max and avg_fea < thresh:
-        return True
-   
-    return False
-
-
-
-### New formula
 def exit_HiC(available_budget, current_budget, fea_vals, desired_performance):
 
     if not fea_vals:
@@ -388,36 +351,32 @@ def exit_MiC(fea_vals, user_patience, low_belief_count, desired_performance):
 
 
 
-def fea_computation(current_idx, current_prediction, history, fading_coeff, is_machine= True, window_size= 200):
-    # maybe with a window?
-    if current_idx == 0:
-        return 1.0
-    
-    numerator= 0
-    denominator= 0
-
-    for past_idx, data in history.items():
-        #past_decision= data['machine'] if is_machine== True else data['user']
-        past_idx= data['idx']
-        if (current_idx - past_idx) <= window_size:
-            past_decision = data['machine'] if is_machine else data['user']
-
-            if past_decision == current_prediction:
-                denominator += 1
-                
-                if past_decision == data['ground_truth']:
-                    temp_dist = fading_coeff ** (current_idx - past_idx)
-                    numerator += temp_dist
-            
-    if denominator == 0:
-        return 0.5
-
-    return numerator/ denominator
-
 
 
 ###########
-# -- UTILITIES
+# -- UTILITIES / PREPROCESSING FUNCTIONS
+
+def clean_compas(data, col_to_delete, col_to_strip= None, drop_duplicates=True):
+
+    if col_to_strip is not None:
+        data[col_to_strip] = data[col_to_strip].str.strip("()")
+    
+    data= data.drop(columns= col_to_delete)
+
+    if drop_duplicates:
+        data= data.drop_duplicates()
+
+    return data.reset_index(drop=True)
+
+
+def stratif(start_point, end_point, class_0, class_1):
+    class_0_perc= class_0.iloc[int(len(class_0)*start_point) : int(len(class_0)*end_point)]
+    class_1_perc= class_1.iloc[int(len(class_1)*start_point) : int(len(class_1)*end_point)]
+
+    total= pd.concat([class_0_perc, class_1_perc]).sample(frac=1, random_state= 42).reset_index(drop=True)
+    #chiaramente se c'è il concat bisogna rifare lo shuffle
+
+    return total
 
 def scale_df(data, pipe, target_c):  # a quanto pare usando questa pipeline di River la label viene persa per strada quindi la devo riattaccarre
     processed_r= []
@@ -429,6 +388,174 @@ def scale_df(data, pipe, target_c):  # a quanto pare usando questa pipeline di R
         scaled_r[target_c] = labels[i]
         processed_r.append(scaled_r)
     return pd.DataFrame(processed_r)
+
+def apply_map(data, col_mapping):
+
+    for col, mapping in col_mapping.items():
+        if col in data.columns:
+            data[col] = data[col].map(mapping)
+    return data
+
+def apply_order(data):
+
+    order= [c for c in data if c not in ['ground truth', 'proba_model', 'provider', 'machine prediction', 'expert prediction']]
+    return data[order]
+
+def x_y_split(df, target):
+    X = df.drop(columns=target)
+    y = df[target]
+    return X, y
+
+
+def set_all_seeds(seed=42):
+    
+    random.seed(seed)
+    np.random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    
+   
+    try:
+        import torch
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    except ImportError:
+        pass
+
+
+def save_data(directory, prefix, data_dict):
+    os.makedirs(directory, exist_ok=True)
+
+    for suffix, data in data_dict.items():
+        path = os.path.join(directory, f"{prefix}{suffix}")
+
+        if suffix.endswith('.pkl'):
+            with open(path, 'wb') as f:
+                pickle.dump(data, f)
+        
+        elif suffix.endswith('.json'):
+            with open(path, 'wb') as f:
+                f.write(orjson.dumps(convert_numpy(data)))
+
+        elif suffix.endswith('.txt'):
+            with open(path, 'w') as f:
+                if isinstance(data, (list, tuple, range)):
+                    for i, val in enumerate(data):
+                        f.write(f"{i} {val}\n")
+                else:
+                    f.write(f"{data}\n")
+
+def create_loader(df, features, target, batch_size=128, shuffle=False):
+
+    #establish external order, pass target col
+    # then pass df acc t or whatever
+
+    X = torch.tensor(df[features].values, dtype=torch.float32)
+    y = torch.tensor(df[target].values, dtype=torch.long)
+
+    dataset = TensorDataset(X, y)
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
+    
+    return X, y, loader
+
+
+
+
+
+
+
+###########
+# -- UTILITIES DEFERRAL NET CALIBRATION
+
+# condense the ignite environment in a single f so the notebook is not polluted
+# major events to log: 
+# 1. create supervised trainer and evaluator for training/validation
+# 2. set logging interval as param
+# 3. trainer event (iteration completed) to log training loss
+# 4. trainer event (epoch completed) to log training and validation metrics
+# 5. trainer event (epoch completed) to update lr scheduler
+# 6. return score function
+# 7. call early stopping (plug params patience, max epochs)
+# 8. add the event handler and checkpoint
+# 9. call trainer run with train loader and max epochs as params
+
+def net_trainer(net, optimizer, criterion, device, acc_t_loader, val_loader, scheduler, iter, model_prefix, directory_name,
+                log_interval=100, patience=25, max_epochs=50):
+
+    # first set the structures
+
+    training_history = {'accuracy':[],'loss':[]}
+    validation_history = {'accuracy':[],'loss':[]}
+    val_metrics = {"accuracy": Accuracy(), "loss": Loss(criterion)}
+
+
+    # set trainer and evaluators
+    trainer = create_supervised_trainer(net, optimizer, criterion, device)
+    train_evaluator = create_supervised_evaluator(net, metrics=val_metrics, device=device)
+    val_evaluator = create_supervised_evaluator(net, metrics=val_metrics, device=device)
+
+    # setting events
+    @trainer.on(Events.ITERATION_COMPLETED(every=log_interval))
+    def log_training_loss(engine):
+        print(f"Epoch[{engine.state.epoch}], Iter[{engine.state.iteration}] Loss: {engine.state.output:.2f}")
+
+    @trainer.on(Events.EPOCH_COMPLETED)
+    def log_training_results(trainer):
+        train_evaluator.run(acc_t_loader)
+        metrics = train_evaluator.state.metrics
+        training_history['accuracy'].append(metrics['accuracy']*100)
+        training_history['loss'].append(metrics['loss'])
+        print(f"Training Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['loss']:.2f}")
+
+    @trainer.on(Events.EPOCH_COMPLETED)
+    def log_validation_results(trainer):
+        val_evaluator.run(val_loader)
+        metrics = val_evaluator.state.metrics
+        validation_history['accuracy'].append(metrics['accuracy']*100)
+        validation_history['loss'].append(metrics['loss'])
+        print(f"Validation Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['loss']:.2f}")
+
+    @trainer.on(Events.EPOCH_COMPLETED)
+    def update_lr_scheduler(trainer):
+        scheduler.step()
+        lr = optimizer.param_groups[0]['lr']
+        print(f"End of Epoch {trainer.state.epoch}: Learning Rate {lr}")
+
+
+    # get score function
+
+    def score_function(engine):
+        return engine.state.metrics["accuracy"]
+    
+    # call early stopping and model checkpoint
+
+    handler = EarlyStopping(patience=patience, score_function=score_function, trainer=trainer)
+
+    checkpoint = ModelCheckpoint(
+        dirname=directory_name,
+        filename_prefix=model_prefix,
+        n_saved=1,
+        create_dir=True,
+        require_empty=False,
+        global_step_transform=global_step_from_engine(trainer) # helps fetch the trainer's state
+    )
+
+    val_evaluator.add_event_handler(Events.EPOCH_COMPLETED, handler)
+    val_evaluator.add_event_handler(Events.EPOCH_COMPLETED, checkpoint, {'model': net})
+
+    # finally call run
+
+    trainer.run(acc_t_loader, max_epochs= max_epochs)
+
+    return training_history, validation_history
+
+
+
+
+
+
+
 
 ###########
 # -- CALIBRAZIONE THRESHOLD STRAT 1 E 2
@@ -502,6 +629,32 @@ def p_defer(x_tensor, net):
 # -- FUNZIONI XAI
 # -- rivisitate per il wrapper della rete torch
     
+def prepr_log_for_xai(memory, log, attr_list, target_name):  
+
+    """
+    ## qui l'idea è che: siccome LORE durante i primi esperimenti non riusciva a generare il neighborhood,
+    ai fini esclusivi di generare le regole e contro regole così da filtrare il df originale, si usano anche le istanze
+    del dataset di avviamento che
+    """
+
+    cols= [c for c in attr_list]
+
+    if log is not None:
+        rows= []
+        for rec_id in log:
+            rec_values= log[rec_id]['dict_form'].copy()
+            rec_values[target_name]= log[rec_id]['ground_truth']
+            rows.append(rec_values)
+        
+        current_memory = pd.DataFrame(rows)
+        current_memory = current_memory[cols]
+    else:
+        current_memory= pd.DataFrame(columns= cols) # se è vuoto 
+
+    avv_memory =  memory[cols].copy()
+    xai_memory= pd.concat([avv_memory, current_memory], ignore_index=True)
+    return xai_memory
+
 
 
 def filter_df_by_counter_rules(instance, log, counter_rules, wrapper): # aggiunto solo il wrapper come parametro input
@@ -722,43 +875,12 @@ def get_counterfactuals_DICE(df_log, x, wrapper, cats, target):
     return x_, elapsed_time, sparsity
 
 
-
-
 def calculate_sparsity(x_dict, cf_x_dict):
     key = list(x_dict.keys())
     x = np.array([x_dict[k] for k in key])
     cf_x = np.array([cf_x_dict[k] for k in key])
     sparsity = np.sum(x != cf_x)
     return sparsity
-
-
-
-
-def prepr_log_for_xai(memory, log, attr_list, target_name):  
-
-    """
-    ## qui l'idea è che: siccome LORE durante i primi esperimenti non riusciva a generare il neighborhood,
-    ai fini esclusivi di generare le regole e contro regole così da filtrare il df originale, si usano anche le istanze
-    del dataset di avviamento che
-    """
-
-    cols= [c for c in attr_list]
-
-    if log is not None:
-        rows= []
-        for rec_id in log:
-            rec_values= log[rec_id]['dict_form'].copy()
-            rec_values[target_name]= log[rec_id]['ground_truth']
-            rows.append(rec_values)
-        
-        current_memory = pd.DataFrame(rows)
-        current_memory = current_memory[cols]
-    else:
-        current_memory= pd.DataFrame(columns= cols) # se è vuoto 
-
-    avv_memory =  memory[cols].copy()
-    xai_memory= pd.concat([avv_memory, current_memory], ignore_index=True)
-    return xai_memory
 
 
 def generate_exp_lore(instance, log, target, wrapper): 
@@ -809,10 +931,6 @@ def generate_exp_lore(instance, log, target, wrapper):
     
 
     return exp, df_similars, rules, df_opp, counter_rules
-
-
-
-
 
 def get_cfe_DICE_MiC(log, curr_rec, torch_model, cats, target): 
     ## prima parte della f rimane praticamente invariata alla sua analoga usata in HiC dalla precedente implementazione
@@ -930,8 +1048,15 @@ def get_cfe_DICE_MiC(log, curr_rec, torch_model, cats, target):
     return curr_rec, elapsed_time, 0
 
 
-
-def get_neighbors(record, record_g_truth, cache, relevance_window= 100, n_neighbors= 1): # la cache senza le colonne provider ecc mi raccomando
+def get_neighbors(record, record_g_truth, target, cache, relevance_window= 100, n_neighbors= 1): # la cache senza le colonne provider ecc mi raccomando
+    
+    # !! remember to pass record as a DICT
+    
+    # record is a dict, called as x= self.X[i]
+    # g_truth likewise
+    # target, its self.target (str)
+    # cache is a DF
+    
     # 100 records should be fine and not too much demanding
 
     # returns 2 vals
@@ -946,32 +1071,45 @@ def get_neighbors(record, record_g_truth, cache, relevance_window= 100, n_neighb
 
     numeric_features = [feat for feat, val in record.items() 
                         if isinstance(val, (int, float, np.number))]
+    # in the dict record, get the col if the vals are either int, float or np.number
+    # else raise value error
+    
     if not numeric_features:
-        raise ValueError("Nessuna feature numerica trovata per record.")
+        raise ValueError("No numerical features found in the record.")
     
 
     # 1. relevancy filter straight away
 
-    relevance= max(0, len(cache) - relevance_window)
+    relevance= max(0, len(cache) - relevance_window)  
+    # get the relevance dinamically based to the relevance window and the current cache
+    # extract only the relevant portion of the cache
+    
     valid_cache = cache.iloc[relevance:].copy()
 
-    if valid_cache.empty:
-        return [],[]
+    # if theres no valid cache exit immediately
+    if valid_cache is None or len(valid_cache)==0:
+        return [],[], [], []
 
     # 2. computing distances on the valid portion only
+
     rec_values = np.array([record[feat] for feat in numeric_features], dtype=np.float64).reshape(1, -1) 
+    # here we build an array of shape (1, number of numeric features) and cast everything to float
+    
         # anche questa logica mantenuta dalla vecchia f
-    cache_values = valid_cache[numeric_features].values.astype(np.float64)
+    cache_values = valid_cache[numeric_features].values.astype(np.float64) # casting everything in the cache for the same reason
 
-    distances = cdist(rec_values, cache_values, 'euclidean')[0]
+    distances = cdist(rec_values, cache_values, 'euclidean')[0] # compute the distances
 
-    valid_cache['distances'] = distances
+    valid_cache['distances'] = distances  # ok questa era un problema, dopo avere sortato va tolta subito
 
     # 3. now filter
-    same_class = valid_cache[valid_cache['ground_truth'] == record_g_truth]
-    opp_class= valid_cache[valid_cache['ground_truth'] != record_g_truth] 
+    same_class = valid_cache[valid_cache[target] == record_g_truth] 
+    opp_class= valid_cache[valid_cache[target] != record_g_truth] 
+
+    # here we apply the the filter for the same and opposite class so we're comparing a value with the column and putting everything in a data frame
 
     # 4. then sort temp cache and get the n_neighbors you want
+
     k_neighbors_same= same_class.sort_values('distances').head(n_neighbors)
     k_neighbors_opp= opp_class.sort_values('distances').head(n_neighbors)
 
@@ -980,20 +1118,28 @@ def get_neighbors(record, record_g_truth, cache, relevance_window= 100, n_neighb
     
     curr_rec_vals= np.array(list(record.values()))
 
-    if k_neighbors_same:
-        nearest_same= k_neighbors_same[0]
-        same_class_vals= np.array(list(nearest_same.values()))
+    if k_neighbors_same is not None and len(k_neighbors_same) > 0: # ok no this must be changed, forgot this wasnt proper
+        k_neighbors_same= k_neighbors_same.drop(columns= 'distances') # drop the distance column after sorting the cache, otherwise it will be included in the sparsity calculation
+        nearest_same= k_neighbors_same.iloc[0] # plus this is df use iloc
+        same_class_vals= nearest_same[numeric_features].values# ok usando iloc hai una serie quindi non serve transformare in np
         sparsity_same= np.sum(curr_rec_vals != same_class_vals)
-    
+        
 
-    if k_neighbors_opp:
-        nearest_opp= k_neighbors_opp[0]
-        opp_class_vals= np.array(list(nearest_opp.values()))
+    if k_neighbors_opp is not None and len(k_neighbors_opp) > 0:
+        k_neighbors_opp= k_neighbors_opp.drop(columns= 'distances')
+        nearest_opp= k_neighbors_opp.iloc[0] # first row 
+        opp_class_vals= nearest_opp[numeric_features].values # get the vals as array
         sparsity_opp= np.sum(curr_rec_vals != opp_class_vals)
+        
 
 
     return k_neighbors_same, k_neighbors_opp, sparsity_same, sparsity_opp
-#we get the col distance btw, could be interesting in the long run
+
+
+# recap the function had severall issues: first, forgot .iloc cause i got tangled up over the constant changes
+# then, !!!! the xai log function returned the DF with the label because its needed to filter over sam/opp class
+# but it must be removed, along with the auxiliary col distance after sorting the cache
+# or just use [numerical_features] so the same order is enforced everywhere
 
 
 
@@ -1087,21 +1233,43 @@ def calculate_distances(x_dict, examples, feature_ranges=None): # originale
 def get_GS_cfe(log, curr_rec, torch_model, cats, target): 
     ## prima parte della f rimane praticamente invariata alla sua analoga usata in HiC dalla precedente implementazione
     
+    # x_rec called like this  x = self.df_batch3[self.feature_names].iloc[record].to_dict() not a tensor
     query_instance =pd.DataFrame([curr_rec]) 
     start_time= time.time()
     elapsed_time= 0
     features_names = [f for f in log.columns if f != target]
 
-    rec= np.array(list(curr_rec.values())).reshape(1, -1)
+    rec= np.array(list(curr_rec[f] for f in features_names)).reshape(1, -1)
         
     try:
+        
         exp = cf.CounterfactualExplanation(rec, torch_model.predict, method= 'GS')
         exp.fit(n_in_layer=200, first_radius=0.1, sparse=True, verbose=False)
         cf_x = exp.enemy.reshape(-1)
 
+        # NOTA sull'implementazione originale della classe CounterfactualExplanation
+        # Da counterfactuals.py abbiamo che self.enemy = cf.find_counterfactuals() che è un metodo della classe GS
+        # ritorna il closest enemy e performa già il reshape 
+        #closest_ennemy_ = sorted(ennemies_,key= lambda x: pairwise_distances(self.obs_to_interprete.reshape(1, -1), x.reshape(1, -1)))[0] 
+
+        # trasformazione lambda tra x e self.obs_to_interprete (che sarebbe questo self.obs_to_interprete = obs_to_interprete
+        #self.prediction_fn = prediction_fn
+        #self.y_obs = prediction_fn(obs_to_interprete.reshape(1, -1))
+        # con self.obs_to_inteprete definito così obs_to_interprete: instance whose prediction is to be interpreded
+
+        # il formato non è menzionato, però quando chiamo il torch_model.predict ottengo un'array delle due predizioni
+        # infatti la dimensione era (8, ) e (2, ) quindi il 2 è la dimensione dell'array label (sbagliato quindi perchè ne deve prendere uno)
+
+        # tra i parametri c'è anche prediction_fn: prediction function, must return an integer label
+        # quindi la funzione predict deve ritornare una label invece dell'array 
+
+        # lets try with the predictone function of the wrapper?
+
+    
         cfs= {}
 
-        for idx, feature in enumerate(curr_rec.keys()): # if counterfactual is found we add to the dict
+        for idx, feature in enumerate(features_names): # if counterfactual is found we add to the dict
+            
             val = cf_x[idx]
 
             if feature in cats: # papabile modifica se con le categoriche vi sono problemi
@@ -1109,10 +1277,11 @@ def get_GS_cfe(log, curr_rec, torch_model, cats, target):
 
             cfs[feature]= val
 
-            elapsed_time = time.time() - start_time
-            cf_vals= np.array(list(cfs.values())) # we take the vals for the counterfactual found
-            curr_vals = np.array(list(curr_rec.values()))
-            sparsity = np.sum(curr_vals != cf_vals)
+        # ok erano indentate dentro quindi per questo mi dava l'errore di chiave 
+        elapsed_time = time.time() - start_time
+        cf_vals= np.array([cfs[f] for f in curr_rec.keys()]) # we take the vals for the counterfactual found
+        curr_vals = np.array(list(curr_rec.values()))
+        sparsity = np.sum(curr_vals != cf_vals)
 
         return cfs, elapsed_time, sparsity
 
@@ -1173,27 +1342,6 @@ def get_GS_cfe(log, curr_rec, torch_model, cats, target):
 
 
 
-def save_data(directory, prefix, data_dict):
-    os.makedirs(directory, exist_ok=True)
-
-    for suffix, data in data_dict.items():
-        path = os.path.join(directory, f"{prefix}{suffix}")
-
-        if suffix.endswith('.pkl'):
-            with open(path, 'wb') as f:
-                pickle.dump(data, f)
-        
-        elif suffix.endswith('.json'):
-            with open(path, 'wb') as f:
-                f.write(orjson.dumps(convert_numpy(data)))
-
-        elif suffix.endswith('.txt'):
-            with open(path, 'w') as f:
-                if isinstance(data, (list, tuple, range)):
-                    for i, val in enumerate(data):
-                        f.write(f"{i} {val}\n")
-                else:
-                    f.write(f"{data}\n")
 
 
 # with open(os.path.join(dir,'User_'+self.name+str(self.mic_model_name)+'model.pkl'), 'wb') as file:
@@ -1232,17 +1380,6 @@ def assess_risk(ground_truth, mach_pred, current_confidence, threshold_conf= 0.8
         return 0
 
 
-
-
-def get_new_df(og_data, switch_data):
-
-    og= og_data.copy()
-    processed= len(switch_data)
-    to_process= og[processed:]
-
-    new_data= pd.concat([switch_data ,to_process], axis= 0).reset_index(drop=True)
-
-    return new_data
 
 
 

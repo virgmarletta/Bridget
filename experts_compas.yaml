@@ -15,9 +15,9 @@ experts:
       #######################################################
       #---------------Weight Sampling Settings--------------#
 
-      # fascia alta di bias: nswprice, nswdemand
-      # mild bias: capital loss, race, age, gender
-      # disregarded_ fnlwgt, marital status, relationship
+      # fascia alta di bias: juv_fel_count, priors_count
+      # mild bias: juv_misd_count, juv_other_count, c_charge_degree
+      # disregarded: sex, age, race
 
     w_dict:
 
@@ -75,7 +75,7 @@ experts:
       # -- anche qui ci sono due metodi: 1 su Defining Cost Distribution, 2 su defining FPR and FNR Distribution
       # -- potremmo fissare il target FPR/FNR hardcoded o mantenendo la struttura di Open L2A integrale
 
-      belief_value: 0.7
+      belief_value: 0.8
 
       # - OPTION 1: Fixed Expertise
       # - i due target combined rappresenterebbero l'overall expertise degli esperti
@@ -92,7 +92,7 @@ experts:
       group_seed: 2
       n: 1
 
-      belief_value: 0.3
+      belief_value: 0.4
 
       target_FPR: 0.05
       
@@ -105,7 +105,7 @@ experts:
 
       group_seed: 3
       n: 1
-      belief_value: 0.7
+      belief_value: 0.8
     
       target_FPR: 0.3
 
@@ -115,7 +115,7 @@ experts:
     inaccurate_not_trusting:
       group_seed: 4
       n: 1
-      belief_value: 0.3
+      belief_value: 0.4
         
       target_FPR: 0.3
 

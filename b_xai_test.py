@@ -135,15 +135,16 @@ class HiC(BRIDGET):
                  n_bins, n_var, maxc, 
                  rule_att, rule_value, 
                  hic_model_name, hic_model,
-                 warm_start_performance, # we input the accuracy/f1 score obtained by the incremental model during pre-training
+                 start_performance=60, # we input the accuracy/f1 score obtained by the incremental model during pre-training
                  allocated_budget = 200,  # so we can fix it sorta as a benchmark, meaning we ideally want to achieve a +5% within the available budget):
-                 emergency_budget= 50,
-                 user_patience= 5,
+                 skepticism_threshold= 0.6,
+                 #user_patience= 5,
                  performance_delta= 0.05,
                  **kwargs):  # budget (representing more like fatigue) of the user, works like an exit condition
                 
         
-
+        # alla prima iterazione la start performance fissata ragionevolmente a caso, mettiamo un 60/62% ? si deve migliorare in ogni cas
+        #e ciò che interessa è cosa otteniamo alla fine del primo hic
         super().__init__(**kwargs)
          
 
@@ -159,15 +160,16 @@ class HiC(BRIDGET):
         self.rule_att = rule_att
         self.rule_value = rule_value
        
-        self.warm_start_performance= warm_start_performance
+        self.start_performance= start_performance # qui leva
         self.allocated_budget= allocated_budget
-        self.emergency_budget= emergency_budget
-        self.user_patience=user_patience
+        #self.emergency_budget= emergency_budget
+        #self.user_patience=user_patience
 
-        self.desired_performance= self.warm_start_performance + (self.warm_start_performance*performance_delta)
+        self.skepticism_threshold= skepticism_threshold
+        self.desired_performance= self.start_performance + (self.start_performance*performance_delta)
         self.spent_budget= 0
-        self.spent_emergency_budget= 0
-        self.priority_q= PriorityManager()
+        #self.spent_emergency_budget= 0
+        #self.priority_q= PriorityManager()
         
         
         self.hic_model= hic_model
@@ -200,8 +202,8 @@ class HiC(BRIDGET):
             self.fairness_records.append(percentage(i, len(self.X)))
 
         self.retrain_count= 0
-
-        self.q_stats= dict()
+        """
+        #self.q_stats= dict()
 
         self.q_stats={
             'instances_processed': 0,
@@ -210,7 +212,7 @@ class HiC(BRIDGET):
             'priority_1': 0,
             'priority_2': 0
             }
-
+        """
 
 
     def train(self, x_avv, y_avv, x_test, y_test):
@@ -270,7 +272,7 @@ class HiC(BRIDGET):
     def start_HiC(self, df_avv):
             
             self.processed= dict()
-            queue_log= []
+            #queue_log= []
 
             machine_predictions = []
             machine_conf_lvls= []
@@ -309,6 +311,7 @@ class HiC(BRIDGET):
                 relabel = False #When this is set to True, Re-Labelling is triggered
 
                 # - BOOSTING- INSPIRED error treating procedure (hopefully)
+                """
                 curr_patience= 0
                 
                 while not self.priority_q.is_empty() and curr_patience <= self.user_patience and self.spent_emergency_budget < self.emergency_budget:
@@ -362,7 +365,7 @@ class HiC(BRIDGET):
                     # incrementing    
                     curr_patience += 1
                     self.spent_emergency_budget+= 1
-
+                """
 
 
                 x = self.X[i]
@@ -382,7 +385,6 @@ class HiC(BRIDGET):
 
                 if record in self.processed: #Duplicated record
                     self.processed[record]['times'] += 1
-                    self.spent_emergency_budget += 1
 
                     #print("Record already processed...")
                     old_decision = int(self.processed[record]['decision'])                    
@@ -473,7 +475,7 @@ class HiC(BRIDGET):
                     self.processed[record]['ideal'] = None
                     self.processed[record]['times'] = 1
 
-                    self.processed[record]['idx']= i
+                    
                     self.processed[record]['dict_form'] = x
                     self.processed[record]['user'] = user_truth
                     self.processed[record]['machine'] = machine_prediction
@@ -550,25 +552,27 @@ class HiC(BRIDGET):
                     else: #Other conditions not triggered. Skeptical Learning Check
                         if user_truth != machine_prediction and self.SKEPT:
 
-                            if skepticism > 0.6 :
+                            if skepticism > self.skepticism_threshold:
+                                #print("High skepticism, asking for XAI...")
                                 self.skept_count += 1
                                 self.xai_check = 0
                                 confirm = self.user_model.believe() 
-
+                                #print(f"User belief: {confirm}")
                                 #confirm = None
                                 
-                                if confirm == None:
+                                if confirm in [0, "0", False]: # Frank originale dice if confirm == None ma non si attiva mai
                                     
                                     start_time = time.time()
                                     xai_log = prepr_log_for_xai(df_avv, self.processed, self.attr_list, self.target)
 
-                                    nearest_ex, nearest_opp, sparsity_ex, sparsity_opp = get_neighbors(record, 
+                                    nearest_ex, nearest_opp, sparsity_ex, sparsity_opp = get_neighbors(x, 
                                                                             y, 
+                                                                            self.target,
                                                                             xai_log, 
                                                                             relevance_window= 50, 
                                                                             n_neighbors= 2
-                                                                            
                                                                             )
+                                    # passi x qui e non record perchè rec è una tupla
                                     
                                     time_KNN= time.time()-start_time
 
@@ -841,6 +845,7 @@ class HiC(BRIDGET):
 
                 # prima di passare avanti, chiamiamo l'assess risk e vediamo se va inserito nella priority queue
 
+                """
                 if provider== 'M' and decision != y:
                     priority_v= assess_risk(y, machine_prediction, pred_proba)
                     if priority_v >0:
@@ -852,6 +857,7 @@ class HiC(BRIDGET):
                             'priority': priority_v
                         })
 
+                        """
 
                 if hic_drift:
                     #print(f"Drift here! Record index {record}")
@@ -866,7 +872,7 @@ class HiC(BRIDGET):
                     "proximity_SAME": proximities_KNN_SAME,
                     "proximity_OPP": proximities_KNN_OPP,
                     "method": "KNN",  # Aggiungi il name del metodo
-                    "dataset": self.name
+                    "dataset": self.dataset_name
                     }
 
 
@@ -876,6 +882,7 @@ class HiC(BRIDGET):
 
                     hic_d = {
                     "model.pkl": self.hic_model,
+                    "preprocessor.pkl":self.preprocessor,
                     "Accuracy.txt": accuracy_score,
                     "F1.txt": f1_score,
                     "Machine_Confidence.txt": machine_conf_lvls,
@@ -884,8 +891,8 @@ class HiC(BRIDGET):
                     "skept.json": skept,
                     "HiC_FEA_machine.txt": self.machine_fea,
                     "HiC_FEA_user.txt": self.user_fea,
-                    "HiC_queue_log.txt": queue_log,
-                    "HiC_queue_stats.txt": self.q_stats
+                    "HiC_stats.txt": self.stats
+                   
                     }
                     
                     save_data(dir, hic_pref, hic_d)
@@ -927,7 +934,7 @@ class HiC(BRIDGET):
                     "proximity_SAME": proximities_KNN_SAME,
                     "proximity_OPP": proximities_KNN_OPP,
                     "method": "KNN",  
-                    "dataset": self.name
+                    "dataset": self.dataset_name
                     }
 
 
@@ -937,6 +944,7 @@ class HiC(BRIDGET):
 
                     hic_d = {
                     "model.pkl": self.hic_model,
+                    "preprocessor.pkl":self.preprocessor,
                     "Accuracy.txt": accuracy_score,
                     "F1.txt": f1_score,
                     "Machine_Confidence.txt": machine_conf_lvls,
@@ -945,8 +953,8 @@ class HiC(BRIDGET):
                     "skept.json": skept,
                     "HiC_FEA_machine.txt": self.machine_fea,
                     "HiC_FEA_user.txt": self.user_fea,
-                    "HiC_queue_log.txt": queue_log,
-                    "HiC_queue_stats.txt": self.q_stats
+                    "HiC_stats.txt": self.stats
+                    
                     }
                     
                     save_data(dir, hic_pref, hic_d)
@@ -998,6 +1006,7 @@ class MiC(BRIDGET):
         self.deferred_decisions= 0
 
         self.fea_mic= []
+        self.fea_net= []
 
 
     def start_MiC(self, x_stream, y_stream, df_switch, r_net=None, two_step_deferral= None): 
@@ -1016,7 +1025,10 @@ class MiC(BRIDGET):
 
         fea_mic_num = 0
         fea_mic_den = 0
-      
+
+        fea_net_num= 0
+        fea_net_den= 0
+
         mach_confidence= [] # lista contenente i valori di predict proba per le singole istanze processate dalla machine
         mach_predictions= [] # lista contenente tutte le predizioni della machine
 
@@ -1041,7 +1053,7 @@ class MiC(BRIDGET):
 
             self.processed[record]['dict_form'] = x
             self.processed[record]['ground_truth'] = y_gt
-            self.processed[record]['idx'] = record
+            
 
             ## si ottengono i risultati della net
             with torch.no_grad():
@@ -1077,7 +1089,7 @@ class MiC(BRIDGET):
                  
                 deferral_proba= p_defer(x_rec, r_net)
                 p_val = deferral_proba.item()
-
+                #print(p_val)
                 if p_val >= self.anqi_mao_thresh:
                     
                     
@@ -1283,19 +1295,44 @@ class MiC(BRIDGET):
 
             ## - FEA COMPUTATION
 
+            # MiC System FEA
             fea_mic_num *= 0.99  # decay factor could also be passed as input instead of hardcoded, its a detail tho i guess
             fea_mic_den *= 0.99
-                
 
-            if net_output == y_gt:
+            if decision == y_gt:
                 fea_mic_num += 1 
-
 
             fea_mic_den += 1
 
             fea_mic_model= fea_mic_num / fea_mic_den if fea_mic_den > 0 else 0.5
               
             self.fea_mic.append(fea_mic_model)
+            
+
+
+            # Deferral Net FEA
+            # there was an issue before because the FEA was computed regardless of the provider, hence it was polluted
+            # also to benchmark we needed the overall system FEA based on the decision too since its a global measure
+
+            if provider == 'M':
+                fea_net_num*= 0.99
+                fea_net_den*= 0.99
+
+                if net_output == y_gt:
+                    fea_net_num += 1 
+
+                fea_net_den += 1
+
+                fea_net= fea_net_num / fea_net_den if fea_net_den > 0 else 0.5
+                
+                self.fea_net.append(fea_net)
+
+            else:
+                if len(self.fea_net) > 0:
+                    self.fea_net.append(self.fea_net[-1])
+                else:
+                    self.fea_net.append(0.5)
+
                         
 
             ## - UPDATING LOG
@@ -1303,7 +1340,7 @@ class MiC(BRIDGET):
             self.processed[record]['user'] = user_pred
             self.processed[record]['machine'] = net_output
             self.processed[record]['proba_model']= max_conf
-            self.processed[record]['decision'] = decision
+            self.processed[record]['decision'] = decision   # ricorda di cambiare fea globale 
             self.processed[record]['provider_flag'] = provider
 
             #fea_mic_model= fea_computation(record, net_output, self.processed, 0.99)
@@ -1360,7 +1397,8 @@ class MiC(BRIDGET):
                     "Model_Confidence.txt.": mach_confidence,
                     "times_GS.txt": times_GS,
                     "GS_metrics.json": metrics_gs,
-                    "MiC_FEA.txt": self.fea_mic                    
+                    "MiC_FEA.txt": self.fea_mic,   
+                    "Def_Net_FEA.txt": self.fea_net                 
                     }
                 
                 save_data(dir, mic_pref, mic_res)
@@ -1407,7 +1445,8 @@ class MiC(BRIDGET):
                     "Model_Confidence.txt": mach_confidence,
                     "times_GS.txt": times_GS,
                     "GS_metrics.json": metrics_gs,
-                    "MiC_FEA.txt": self.fea_mic
+                    "MiC_FEA.txt": self.fea_mic,
+                    "Def_Net_FEA.txt": self.fea_net 
                     }
                 
         save_data(dir, mic_pref, mic_res)

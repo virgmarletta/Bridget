@@ -357,7 +357,7 @@ class DeferralNet(nn.Module):
             logits = self.forward(x)
             return torch.softmax(logits, dim=1).cpu().numpy()
 
-    def predict(self, x, device):
+    def predict(self, x, device=None):
         probas= self.predict_proba_nn(x, device)
         return np.argmax(probas, axis=1)
 
@@ -476,7 +476,6 @@ class PyTorchWrapper(BaseEstimator):  # esclusivamente per la XAI in MiC
         self.model.eval() 
          
         if isinstance(X, dict):
-            
             X = np.array([[X[f] for f in self.features_names]])
 
         if isinstance(X, pd.DataFrame):
@@ -499,7 +498,7 @@ class PyTorchWrapper(BaseEstimator):  # esclusivamente per la XAI in MiC
         if isinstance(X, pd.DataFrame):
              X= X[self.features_names].values
         
-        X_t = torch.tensor(X.astype(np.float32))
+        X_t = torch.tensor(X, dtype= torch.float32)
 
         with torch.no_grad():
             outputs = self.model(X_t)
@@ -507,17 +506,28 @@ class PyTorchWrapper(BaseEstimator):  # esclusivamente per la XAI in MiC
 
         return probas
     
-
-
     
     def predict_one(self, x):
+
+        # ok ragioniamo, io gli passo x come dizionario dal main body
+        # gs invece quando lo applico mi passa una numpy array
         self.model.eval() 
+
         if isinstance(x, dict):
             x_input = np.array([[x[f] for f in self.features_names]], dtype=np.float32)
-        
-        res = self.model(torch.from_numpy(x_input))
+            # se è un dict come succede, lo trasformiamo in array con dimesione (1, 8) per compas
+        else:
+            x_input = np.array(x, dtype=np.float32).reshape(-1, 8)  
+            # se non è un dict può essere tensore o già numpy array che mi arriva da GS
+            # con il reshape se fatto in maniera giusta dovrei ottenere di nuovo (1,8) ma tutto dipende da come è fatto quel -1
+            # perchè siccome gli passo come parametro di generazione 200, 200 sono le righe, quindi non può essere 1 il primo termine,
+            # ma dovrebbe essere 200
+
+        with torch.no_grad():
+            res = self.model(torch.from_numpy(x_input))
         return int(torch.argmax(res, dim=1).item())
-    
+
+
 
 
 
